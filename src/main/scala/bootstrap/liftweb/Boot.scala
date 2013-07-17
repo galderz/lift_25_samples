@@ -77,7 +77,8 @@ class Boot {
         new ExampleClock(session, Full("Clock"), name, defaultXml, attributes)
     }
 
-    DB.defineConnectionManager(DefaultConnectionIdentifier, DBVendor)
+    // Default datasource jndi name on Escalante
+    DefaultConnectionIdentifier.jndiName = "java:jboss/datasources/ExampleDS"
     Schemifier.schemify(true, Schemifier.infoF _, Person, User)
 
   }
@@ -193,66 +194,4 @@ class Boot {
     }
   }
 
-  /**
-   * Database connection calculation
-   */
-  object DBVendor extends ConnectionManager {
-    private var pool: List[Connection] = Nil
-    private var poolSize = 0
-    private val maxPoolSize = 4
-
-    private lazy val chooseDriver = "org.h2.Driver"
-
-    private lazy val chooseURL = "jdbc:h2:mem:lift;DB_CLOSE_DELAY=-1"
-
-    private def createOne: Box[Connection] = {
-      try {
-        val driverName: String = Props.get("db.driver") openOr chooseDriver
-        val dbUrl: String = Props.get("db.path") openOr chooseURL
-
-        Class.forName(driverName)
-
-        val dm = (Props.get("db.user"), Props.get("db.password")) match {
-          case (Full(user), Full(pwd)) =>
-            DriverManager.getConnection(dbUrl, user, pwd)
-
-          case _ => DriverManager.getConnection(dbUrl)
-        }
-        Full(dm)
-      } catch {
-        case e: Exception => e.printStackTrace; Empty
-      }
-    }
-
-    def newConnection(name: ConnectionIdentifier): Box[Connection] =
-      synchronized {
-        pool match {
-          case Nil if poolSize < maxPoolSize =>
-            val ret = createOne
-            poolSize = poolSize + 1
-            ret.foreach(c => pool = c :: pool)
-            ret
-
-          case Nil => wait(1000L); newConnection(name)
-          case x :: xs => try {
-            x.setAutoCommit(false)
-            Full(x)
-          } catch {
-            case e: Throwable => try {
-              pool = xs
-              poolSize = poolSize - 1
-              x.close
-              newConnection(name)
-            } catch {
-              case e: Throwable => newConnection(name)
-            }
-          }
-        }
-      }
-
-    def releaseConnection(conn: Connection): Unit = synchronized {
-      pool = conn :: pool
-      notify
-    }
-  }
 }
